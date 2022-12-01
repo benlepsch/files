@@ -7,6 +7,13 @@
 
 #define TOTAL_BLOCKS (10*1024)
 
+#define toutput_filename "TEST_IMAGE"
+#define tinput_filename "test_input"
+#define tuid 20
+#define tgid 40
+#define tn_dblocks 10
+#define tn_iblocks 1
+
 static unsigned char rawdata[TOTAL_BLOCKS*BLOCK_SZ];
 static char bitmap[TOTAL_BLOCKS];
 int debug = 1;
@@ -41,7 +48,7 @@ void write_int(int pos, int val)
   *ptr = val;
 }
 
-void write_block(int blockno, char* data) {
+void write_block(int blockno, char data[]) {
   // write data from char array into rawdata
   // assumes there's BLOCK_SZ bytes to write
 
@@ -64,6 +71,8 @@ void place_file(char *file, int uid, int gid, int n_dblocks, int n_iblocks)
   FILE *fpr;
   unsigned char buf[BLOCK_SZ];
   int finished_reading = 0;
+
+  ip = malloc(sizeof(struct inode));
 
   ip->mode = 0;
   ip->size = 0;
@@ -91,12 +100,17 @@ void place_file(char *file, int uid, int gid, int n_dblocks, int n_iblocks)
     ip->dblocks[i] = blockno;
     
     // read from file
-    char *buf = malloc(BLOCK_SZ);
-    size_t nread = fread(buf, BLOCK_SZ, 1, fpr);
-    write_block(blockno, buf);
-    free(buf);
+    char buf[BLOCK_SZ];
+    int nread = (int)fread(buf, BLOCK_SZ, 1, fpr);
 
-    ip->size += nread;
+    if (debug) {
+      printf("read from file: %s\n", buf);
+      printf("bytes read: %i\n", nread);
+    }
+
+    write_block(blockno, buf);
+
+    nbytes += nread;
 
     if (nread < BLOCK_SZ) {
       finished_reading = 1;
@@ -107,12 +121,12 @@ void place_file(char *file, int uid, int gid, int n_dblocks, int n_iblocks)
   // fill in here if IBLOCKS needed
   // if so, you will first need to get an empty block to use for your IBLOCK
 
-  for (i = 0; i < N_IBLOCKS; i++) {
-    // new iblock
-    int blockno = get_free_block(n_iblocks);
-    ip->iblocks[i] = blockno;
+  // for (i = 0; i < N_IBLOCKS; i++) {
+  //   // new iblock
+  //   int blockno = get_free_block(n_iblocks);
+  //   ip->iblocks[i] = blockno;
 
-  }
+  // }
 
   ip->size = nbytes;  // total number of data bytes written for file
   printf("successfully wrote %d bytes of file %s\n", nbytes, file);
@@ -133,28 +147,33 @@ void main(int argc, char* argv[]) // add argument handling
   int inodepos;
   printf("in program\n");
   // disk_image -create -image IMAGE_FILE -nblocks N -iblocks M -inputfile FILE -u UID -g GID -block D -inodepos I  
-  for (i = 1; i < argc - 1; i++) {
-    if (strcmp(argv[i], "-image"))
-      output_filename = argv[i+1];
-    if (strcmp(argv[i], "-nblocks"))
-      n_dblocks = atoi(argv[i+1]);
-    if (strcmp(argv[i], "-iblocks"))
-      n_iblocks = atoi(argv[i+1]);
-    if (strcmp(argv[i], "-inputfile"))
-      input_filename = argv[i+1];
-    if (strcmp(argv[i], "-u"))
-      uid = atoi(argv[i+1]);
-    if (strcmp(argv[i], "-g"))
-      gid = atoi(argv[i+1]);
-    if (strcmp(argv[i], "-block"))
-      block = atoi(argv[i+1]);
-    if (strcmp(argv[i], "-inodepos"))
-      inodepos = atoi(argv[i+1]);
-    printf(argv[i]);
-    printf("\n");
-  }
+  // for (i = 1; i < argc - 1; i++) {
+  //   if (strcmp(argv[i], "-image"))
+  //     output_filename = argv[i+1];
+  //   if (strcmp(argv[i], "-nblocks"))
+  //     n_dblocks = atoi(argv[i+1]);
+  //   if (strcmp(argv[i], "-iblocks"))
+  //     n_iblocks = atoi(argv[i+1]);
+  //   if (strcmp(argv[i], "-inputfile"))
+  //     input_filename = argv[i+1];
+  //   if (strcmp(argv[i], "-u"))
+  //     uid = atoi(argv[i+1]);
+  //   if (strcmp(argv[i], "-g"))
+  //     gid = atoi(argv[i+1]);
+  //   if (strcmp(argv[i], "-block"))
+  //     block = atoi(argv[i+1]);
+  //   if (strcmp(argv[i], "-inodepos"))
+  //     inodepos = atoi(argv[i+1]);
+  //   printf(argv[i]);
+  //   printf("\n");
+  // }
+
+  // if (debug) {
+  //   printf("output filename: %s\n", output_filename);
+  //   printf("input file: %s\n", input_filename);
+  // }
   
-  outfile = fopen(output_filename, "wb");
+  outfile = fopen(toutput_filename, "wb");
   
   if (!outfile) {
     perror("datafile open\n");
@@ -164,7 +183,7 @@ void main(int argc, char* argv[]) // add argument handling
   if (debug)
     printf("about to place file\n");
   // fill in here to place file 
-  place_file(input_filename, uid, gid, n_dblocks, n_iblocks);
+  place_file(tinput_filename, tuid, tgid, tn_dblocks, tn_iblocks);
 
   i = fwrite(rawdata, 1, TOTAL_BLOCKS*BLOCK_SZ, outfile);
   if (i != TOTAL_BLOCKS*BLOCK_SZ) {
