@@ -13,6 +13,8 @@
 #define tgid 40
 #define tn_dblocks 10
 #define tn_iblocks 1
+#define tiblock 0
+#define tipos 0
 
 static unsigned char rawdata[TOTAL_BLOCKS*BLOCK_SZ];
 static char bitmap[TOTAL_BLOCKS];
@@ -95,6 +97,7 @@ void place_file(char *file, int uid, int gid, int n_dblocks, int n_iblocks)
   if (debug)
     printf("input file open\n");
 
+  // populate dblocks
   for (i = 0; i < N_DBLOCKS; i++) {
     int blockno = get_free_block(n_iblocks);
     ip->dblocks[i] = blockno;
@@ -120,21 +123,158 @@ void place_file(char *file, int uid, int gid, int n_dblocks, int n_iblocks)
 
   // fill in here if IBLOCKS needed
   // if so, you will first need to get an empty block to use for your IBLOCK
+  // populate iblocks
+  if (!finished_reading) {
+    for (i = 0; i < N_IBLOCKS; i++) {
+      // new iblock
+      int blockno = get_free_block(n_iblocks);
+      ip->iblocks[i] = blockno;
 
-  // for (i = 0; i < N_IBLOCKS; i++) {
-  //   // new iblock
-  //   int blockno = get_free_block(n_iblocks);
-  //   ip->iblocks[i] = blockno;
+      // then fill iblock with pointers to data blocks?
+      // 'pointers' in this case means the block number
+      int j;
+      for (j = 0; j < BLOCK_SZ / sizeof(int); j++) {
+        int dblockno = get_free_block(n_iblocks);
 
-  // }
+        // add pointer
+        write_int(blockno*BLOCK_SZ + j*sizeof(int), dblockno);
+
+        // i'm beginning to think i could have written this better
+
+        // fill data block
+        // read from file
+        char buf[BLOCK_SZ];
+        int nread = (int)fread(buf, BLOCK_SZ, 1, fpr);
+
+        if (debug) {
+          printf("read from file: %s\n", buf);
+          printf("bytes read: %i\n", nread);
+        }
+
+        // write data block, not the inode block
+        write_block(dblockno, buf);
+
+        nbytes += nread;
+
+        if (nread < BLOCK_SZ) {
+          finished_reading = 1;
+          break;
+        }
+      }
+
+      if (finished_reading)
+        break;
+    }
+  }
+
+
+  // populate i2block
+  if (!finished_reading) {
+    // allocate a doubly indirect block + store pointer
+    int di_blockno = get_free_block(n_iblocks);
+    ip->i2block = di_blockno;
+
+    // fill with pointers (block numbers) of indirect blocks
+    for (i = 0; i < BLOCK_SZ / sizeof(int); i++) {
+      // get indirect block and update pointer
+      int i_blockno = get_free_block(n_iblocks);
+      write_int(BLOCK_SZ*di_blockno + i*sizeof(int), i_blockno);
+
+      // fill indirect block with poitners to data blcokks
+      int j;
+      for (j = 0; j < BLOCK_SZ / sizeof(int); j++) {
+        int dblockno = get_free_block(n_iblocks);
+        write_int(BLOCK_SZ*i_blockno + j*sizeof(int), dblockno);
+
+        // read from file
+        char buf[BLOCK_SZ];
+        int nread = (int)fread(buf, BLOCK_SZ, 1, fpr);
+
+        if (debug) {
+          printf("read from file: %s\n", buf);
+          printf("bytes read: %i\n", nread);
+        }
+
+        write_block(dblockno, buf);
+
+        nbytes += nread;
+
+        if (nread < BLOCK_SZ) {
+          finished_reading = 1;
+          break;
+        }
+      }
+
+      if (finished_reading)
+        break;
+    }
+  }
+
+
+  // populate i3block
+  if (!finished_reading) {
+    int ti_blockno = get_free_block(n_iblocks);
+    ip->i3block = ti_blockno;
+
+    for (i = 0; i < BLOCK_SZ / sizeof(int); i++) {
+      // add another doubly indirect block, update pointer
+      int di_blockno = get_free_block(n_iblocks);
+      write_int(BLOCK_SZ*ti_blockno + i*sizeof(int), di_blockno);
+
+      // fill with pointers (block numbers) of indirect blocks
+      for (i = 0; i < BLOCK_SZ / sizeof(int); i++) {
+        // get indirect block and update pointer
+        int i_blockno = get_free_block(n_iblocks);
+        write_int(BLOCK_SZ*di_blockno + i*sizeof(int), i_blockno);
+
+        // fill indirect block with poitners to data blcokks
+        int j;
+        for (j = 0; j < BLOCK_SZ / sizeof(int); j++) {
+          int dblockno = get_free_block(n_iblocks);
+          write_int(BLOCK_SZ*i_blockno + j*sizeof(int), dblockno);
+
+          // read from file
+          char buf[BLOCK_SZ];
+          int nread = (int)fread(buf, BLOCK_SZ, 1, fpr);
+
+          if (debug) {
+            printf("read from file: %s\n", buf);
+            printf("bytes read: %i\n", nread);
+          }
+
+          write_block(dblockno, buf);
+
+          nbytes += nread;
+
+          if (nread < BLOCK_SZ) {
+            finished_reading = 1;
+            break;
+          }
+        }
+
+        if (finished_reading)
+          break;
+      }
+      if (finished_reading)
+        break;
+    }
+  }
 
   ip->size = nbytes;  // total number of data bytes written for file
   printf("successfully wrote %d bytes of file %s\n", nbytes, file);
+
+  // write inode to disk
+  // ??
 }
 
 void main(int argc, char* argv[]) // add argument handling
 {
   int i;
+  // zero out rawdata (i dont know if we have to do this)
+  // we do actually it says zero out disk in assignment
+  for (i = 0; i < TOTAL_BLOCKS*BLOCK_SZ; i++)
+    write_int(i, (int)'0');
+
   FILE *outfile;
   char *output_filename;
   FILE *infile;
@@ -143,9 +283,10 @@ void main(int argc, char* argv[]) // add argument handling
   int n_iblocks;
   int uid;
   int gid;
-  int block;
-  int inodepos;
-  printf("in program\n");
+  int iblock;
+  int ipos;
+  if (debug)
+    printf("in program\n");
   // disk_image -create -image IMAGE_FILE -nblocks N -iblocks M -inputfile FILE -u UID -g GID -block D -inodepos I  
   // for (i = 1; i < argc - 1; i++) {
   //   if (strcmp(argv[i], "-image"))
@@ -161,9 +302,9 @@ void main(int argc, char* argv[]) // add argument handling
   //   if (strcmp(argv[i], "-g"))
   //     gid = atoi(argv[i+1]);
   //   if (strcmp(argv[i], "-block"))
-  //     block = atoi(argv[i+1]);
+  //     iblock = atoi(argv[i+1]);
   //   if (strcmp(argv[i], "-inodepos"))
-  //     inodepos = atoi(argv[i+1]);
+  //     ipos = atoi(argv[i+1]);
   //   printf(argv[i]);
   //   printf("\n");
   // }
