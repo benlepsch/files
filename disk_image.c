@@ -65,7 +65,7 @@ void write_block(int blockno, char data[]) {
   }
 }
 
-void place_file(char *file, int uid, int gid, int n_dblocks, int n_iblocks)
+void place_file(char *file, int uid, int gid, int n_dblocks, int n_iblocks, int iblock, int ipos)
 {
   int i, nbytes = 0;
   int i2block_index, i3block_index;
@@ -264,7 +264,32 @@ void place_file(char *file, int uid, int gid, int n_dblocks, int n_iblocks)
   printf("successfully wrote %d bytes of file %s\n", nbytes, file);
 
   // write inode to disk
-  // ??
+  // i believe we literally just line up each field of the inode and write
+  // to block iblock, position ipos
+  // ipos being position in inodes, not bytes
+  // inodes are 100 bytes in size so there will be some extra space at the end of each iblock
+  // ah but here is a problem
+  // if we get a block with get_free_block it will mark the whole block as taken for only one inode
+  // well ill write it anyway and change it later i guess
+  // or does it even matter? we specify block and position within the block
+  int write_pos = iblock*BLOCK_SZ + 100*ipos;
+  write_int(write_pos, ip->mode);
+  write_int(write_pos + sizeof(int), ip->nlink);
+  write_int(write_pos + 2*sizeof(int), ip->uid);
+  write_int(write_pos + 3*sizeof(int), ip->gid);
+  write_int(write_pos + 4*sizeof(int), ip->size);
+  write_int(write_pos + 5*sizeof(int), ip->ctime);
+  write_int(write_pos + 6*sizeof(int), ip->mtime);
+  write_int(write_pos + 7*sizeof(int), ip->atime);
+  // there's gotta be a better way to write this
+  for (i = 0; i < N_DBLOCKS; i++) {
+    write_int(write_pos + (8+i)*sizeof(int), ip->dblocks[i]);
+  }
+  for (i = 0; i < N_IBLOCKS; i++) {
+    write_int(write_pos + (8+i+N_DBLOCKS)*sizeof(int), ip->iblocks[i]);
+  }
+  write_int(write_pos + (9+N_DBLOCKS+N_IBLOCKS)*sizeof(int), ip->i2block);
+  write_int(write_pos + (10+N_DBLOCKS+N_IBLOCKS)*sizeof(int), ip->i3block);
 }
 
 void main(int argc, char* argv[]) // add argument handling
@@ -324,7 +349,7 @@ void main(int argc, char* argv[]) // add argument handling
   if (debug)
     printf("about to place file\n");
   // fill in here to place file 
-  place_file(tinput_filename, tuid, tgid, tn_dblocks, tn_iblocks);
+  place_file(tinput_filename, tuid, tgid, tn_dblocks, tn_iblocks, tiblock, tipos);
 
   i = fwrite(rawdata, 1, TOTAL_BLOCKS*BLOCK_SZ, outfile);
   if (i != TOTAL_BLOCKS*BLOCK_SZ) {
