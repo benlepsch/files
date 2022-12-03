@@ -1,0 +1,7 @@
+Ben Lepsch btl9zu
+Ben wrote most of the place_file function and the argument handling
+
+Ian Le iml7uk
+Ian wrote some of the place_file function and the extract_files function
+
+we both helped each other debug etc etc

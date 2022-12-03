@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <strings.h>
+#include <string.h>
 #include <errno.h>
 #include <assert.h>
 #include "inode.h"
@@ -36,6 +37,8 @@ int get_free_block(int M)
 
   assert(blockno < TOTAL_BLOCKS);
   assert(bitmap[blockno]);
+  if (debug)
+    printf("got new block\n");
   return blockno;
 }
 
@@ -50,6 +53,13 @@ void write_int(int pos, int val)
   *ptr = val;
 }
 
+int read_int(int pos)
+{
+  int *ptr = (int *)&rawdata[pos];
+  return *ptr;
+}
+
+
 void write_block(int blockno, char data[]) {
   // write data from char array into rawdata
   // assumes there's BLOCK_SZ bytes to write
@@ -63,6 +73,15 @@ void write_block(int blockno, char data[]) {
     // rawdata[ri] = data[i];
     write_int(ri, (int)data[i]);
   }
+}
+
+void read_block(int blockno, char *data, int nbytes) {
+  int ri = blockno*BLOCK_SZ;
+  int i;
+  for (i = 0; i < nbytes; i++, ri++) {
+    data[i] = (char)read_int(ri);
+  }
+
 }
 
 void place_file(char *file, int uid, int gid, int n_dblocks, int n_iblocks, int iblock, int ipos)
@@ -94,6 +113,8 @@ void place_file(char *file, int uid, int gid, int n_dblocks, int n_iblocks, int 
     exit(-1);
   }
 
+  //fseek(fpr, 0, SEEK_SET);
+
   if (debug)
     printf("input file open\n");
 
@@ -104,11 +125,18 @@ void place_file(char *file, int uid, int gid, int n_dblocks, int n_iblocks, int 
     
     // read from file
     char buf[BLOCK_SZ];
-    int nread = (int)fread(buf, BLOCK_SZ, 1, fpr);
+    size_t nread = fread(buf, 1, BLOCK_SZ, fpr);
 
     if (debug) {
       printf("read from file: %s\n", buf);
-      printf("bytes read: %i\n", nread);
+      printf("bytes read: %lu\n", nread);
+    }
+
+    if (nread < BLOCK_SZ) {
+      // write out the reest of the buf so it doesnt look like weird
+      for (i = nread; i < BLOCK_SZ; i++) {
+        buf[i] = '0';
+      }
     }
 
     write_block(blockno, buf);
@@ -262,6 +290,7 @@ void place_file(char *file, int uid, int gid, int n_dblocks, int n_iblocks, int 
 
   ip->size = nbytes;  // total number of data bytes written for file
   printf("successfully wrote %d bytes of file %s\n", nbytes, file);
+  fclose(fpr);
 
   // write inode to disk
   // i believe we literally just line up each field of the inode and write
@@ -292,6 +321,135 @@ void place_file(char *file, int uid, int gid, int n_dblocks, int n_iblocks, int 
   write_int(write_pos + (10+N_DBLOCKS+N_IBLOCKS)*sizeof(int), ip->i3block);
 }
 
+void extract_files(char* file, int uid, int gid) {
+  FILE *fpr;
+  fpr = fopen(file, "r");
+  if (!fpr) {
+    perror(file);
+    exit(-1);
+  }
+
+  int b;
+  // read entire file into rawdata
+  for (b = 0; b < TOTAL_BLOCKS; b++) {
+    int i;
+    char buf[BLOCK_SZ];
+    size_t nread = fread(buf, 1, BLOCK_SZ, fpr);
+
+    if (nread < BLOCK_SZ) {
+      for (i = nread; i < BLOCK_SZ; i++) {
+        buf[i] = '0';
+      }
+    }
+
+    for (i = 0; i < BLOCK_SZ; i++) {
+      write_int(b*BLOCK_SZ + i, (int)buf[i]);
+    }
+
+    if (nread < BLOCK_SZ)
+      break;
+  }
+
+  // now we traverse the entire file 
+  int i;
+  char filename = 'a';
+  for (i = 0; i < TOTAL_BLOCKS; i++) {
+    int j;
+    for (j = 0; j < 10; j++) {
+      if ((read_int(i*BLOCK_SZ + j*100 + 8) == uid) && (read_int(i*BLOCK_SZ + j*100 + 12) == gid)) {
+        int size = read_int(i*BLOCK_SZ + j*100 + 16);
+        printf("File found at block %i, file size %i\n", i, size);
+
+        // commented out because incomplete and segfaulting :()
+        // // reconstruct a file
+        // // open a file to put data into
+        // FILE *w;
+        // w = fopen(filename, "w+");
+        // filename += 1;
+
+        // // read data blocks
+        // // while size is > 0
+        // int c;
+        // int dbase = i*BLOCK_SZ + j*100 + 32;
+        // for (c = 0; c < N_DBLOCKS; c++) {
+        //   int blockno = read_int(dbase);
+        //   char data[BLOCK_SZ];
+
+        //   if (size > BLOCK_SZ) {
+        //     read_block(blockno, data, BLOCK_SZ);
+        //     fwrite(data, 1, BLOCK_SZ, w);
+        //   } else {
+        //     read_block(blockno, data, size);
+        //     fwrite(data, 1, size, w);
+        //   }
+
+        //   size -= BLOCK_SZ;
+
+        //   if (size < 0)
+        //     break;
+          
+        //   dbase += 4;
+        // }
+
+        // // read indirect blocks
+        // if (size > 0) {
+        //   int ibase = i*BLOCK_SZ + j*100 + 32 + 4*N_DBLOCKS;
+        //   for (c = 0; c < N_IBLOCKS; c++) {
+        //     int y;
+        //     for (y = 0; y < BLOCK_SZ / sizeof(int); y++) {
+        //       int blockno = read_int(ibase + 4*y);
+        //       char data[BLOCK_SZ];
+
+        //       if (size > BLOCK_SZ) {
+        //         read_block(blockno, data, BLOCK_SZ);
+        //         fwrite(data, 1, BLOCK_SZ, w);
+        //       } else {
+        //         read_block(blockno, data, size);
+        //         fwrite(data, 1, size, w);
+        //       }
+
+        //       size -= BLOCK_SZ;
+
+        //       if (size < 0)
+        //         break;
+        //     }
+        //   }
+        // }
+
+        // // read doubly indirect block
+        // if (size > 0) {
+        //   int dibase = i*BLOCK_SZ + j*100 + 32 + 4*N_DBLOCKS + 4*N_IBLOCKS;
+        //   for (c = 0; c < BLOCK_SZ / sizeof(int); c++) {
+        //     int iblockno = read_int(dibase + 4*c);
+        //     int k;
+        //     for (k = iblockno; k < iblockno + BLOCK_SZ; k += 4) {
+        //       int blockno = read_int(k);
+        //       char data[BLOCK_SZ];
+
+        //       if (size > BLOCK_SZ) {
+        //         read_block(blockno, data, BLOCK_SZ);
+        //         fwrite(data, 1, BLOCK_SZ, w);
+        //       } else {
+        //         read_block(blockno, data, size);
+        //         fwrite(data, 1, size, w);
+        //       }
+
+        //       size -= BLOCK_SZ;
+
+        //       if (size < 0)
+        //         break;
+        //     }
+        //   }
+        // }
+
+
+
+        // fclose(w);
+      }
+    }
+  }
+}
+
 void main(int argc, char* argv[]) // add argument handling
 {
   int i;
@@ -313,54 +471,71 @@ void main(int argc, char* argv[]) // add argument handling
   if (debug)
     printf("in program\n");
   // disk_image -create -image IMAGE_FILE -nblocks N -iblocks M -inputfile FILE -u UID -g GID -block D -inodepos I  
-  // for (i = 1; i < argc - 1; i++) {
-  //   if (strcmp(argv[i], "-image"))
-  //     output_filename = argv[i+1];
-  //   if (strcmp(argv[i], "-nblocks"))
-  //     n_dblocks = atoi(argv[i+1]);
-  //   if (strcmp(argv[i], "-iblocks"))
-  //     n_iblocks = atoi(argv[i+1]);
-  //   if (strcmp(argv[i], "-inputfile"))
-  //     input_filename = argv[i+1];
-  //   if (strcmp(argv[i], "-u"))
-  //     uid = atoi(argv[i+1]);
-  //   if (strcmp(argv[i], "-g"))
-  //     gid = atoi(argv[i+1]);
-  //   if (strcmp(argv[i], "-block"))
-  //     iblock = atoi(argv[i+1]);
-  //   if (strcmp(argv[i], "-inodepos"))
-  //     ipos = atoi(argv[i+1]);
-  //   printf(argv[i]);
-  //   printf("\n");
-  // }
+  // disk_image -insert -image IMAGE_FILE -nblocks N -iblocks M -inputfile FILE -u UID -g GID -block D -inodepos I
 
-  // if (debug) {
-  //   printf("output filename: %s\n", output_filename);
-  //   printf("input file: %s\n", input_filename);
-  // }
-  
-  outfile = fopen(toutput_filename, "wb");
-  
-  if (!outfile) {
-    perror("datafile open\n");
-    exit(-1);
+  if (argc < 2) {
+    printf("missing argument: -create or -insert or -extract\n");
+    exit(0);
   }
 
-  if (debug)
-    printf("about to place file\n");
-  // fill in here to place file 
-  place_file(tinput_filename, tuid, tgid, tn_dblocks, tn_iblocks, tiblock, tipos);
+  if (!strcmp(argv[1], "-create")) {
+    if (argc < 18) {
+      printf("incorrect format, should be: \n");
+      printf("disk_image -create/-insert -image IMAGE_FILE -nblocks N -iblocks M -inputfile FILE -u UID -g GID -block D -inodepos I\n");
+      exit(0);
+    }
+    output_filename = argv[3];
+    n_dblocks = atoi(argv[5]);
+    n_iblocks = atoi(argv[7]);
+    input_filename = argv[9];
+    uid = atoi(argv[11]);
+    gid = atoi(argv[13]);
+    iblock = atoi(argv[15]);
+    ipos = atoi(argv[17]);
+  } 
 
-  i = fwrite(rawdata, 1, TOTAL_BLOCKS*BLOCK_SZ, outfile);
-  if (i != TOTAL_BLOCKS*BLOCK_SZ) {
-    perror("fwrite");
-    exit(-1);
+  // disk_image -extract -image IMAGE_FILE -u UID -g GID -o PATH
+  if (!strcmp(argv[1], "-extract")) {
+    if (argc < 10) {
+      printf("incorrect format, should be: \n");
+      printf("disk_image -extract -image IMAGE_FILE -u UID -g GID -o PATH\n");
+      exit(0);
+    }
+    input_filename = argv[3];
+    uid = atoi(argv[5]);
+    gid = atoi(argv[7]);
   }
 
-  i = fclose(outfile);
-  if (i) {
-    perror("datafile close");
-    exit(-1);
+  if(debug) {
+    printf("iblcoks: %i\n", n_iblocks);
+  }
+  
+  if (!strcmp(argv[1], "-create")) {
+    outfile = fopen(output_filename, "wb");
+    
+    if (!outfile) {
+      perror("datafile open\n");
+      exit(-1);
+    }
+
+    if (debug)
+      printf("about to place file\n");
+    // fill in here to place file 
+    place_file(input_filename, uid, gid, n_dblocks, n_iblocks, iblock, ipos);
+
+    i = fwrite(rawdata, 1, TOTAL_BLOCKS*BLOCK_SZ, outfile);
+    if (i != TOTAL_BLOCKS*BLOCK_SZ) {
+      perror("fwrite");
+      exit(-1);
+    }
+
+    i = fclose(outfile);
+    if (i) {
+      perror("datafile close");
+      exit(-1);
+    }
+  } else if (!strcmp(argv[1], "-extract")) {
+    extract_files(input_filename, uid, gid);
   }
 
   printf("Done.\n");
